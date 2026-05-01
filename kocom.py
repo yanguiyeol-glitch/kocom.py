@@ -34,7 +34,7 @@ polling_interval = 300  # polling interval
 header_h = 'aa55'
 trailer_h = '0d0d'
 packet_size = 21  # total 21bytes
-chksum_position = 18  # 18th byte
+chksum_position = 18  # 19th byte
 
 type_t_dic = {'30b':'send', '30d':'ack'}
 seq_t_dic = {'c':1, 'd':2, 'e':3, 'f':4}
@@ -256,7 +256,7 @@ def parse(hex_data):
     type_h = hex_data[4:7]    # send/ack : 30b(send) 30d(ack)
     seq_h = hex_data[7:8]    # sequence : c(1st) d(2nd)
     monitor_h = hex_data[8:10] # sequence : 00(wallpad) 02(KitchenTV)
-    dest_h = hex_data[10:14] # dest addr : 0100(wallpad0) 0e00(light0) 3600(thermo0) 3601(thermo1) 3602(thermo2) 3603(thermo3)
+    dest_h = hex_data[10:14] # dest addr : 0100(wallpad0) 3600(thermo0) 3601(thermo1) 3602(thermo2) 3603(thermo3) 4400(elevator)
     src_h = hex_data[14:18]   # source addr  
     cmd_h = hex_data[18:20]   # command : 3e(query)
     value_h = hex_data[20:36]  # value
@@ -267,28 +267,28 @@ def parse(hex_data):
     payload_h = hex_data[18:36]
     cmd = cmd_t_dic.get(cmd_h)
 
-    ret = { 'header_h':header_h, 'type_h':type_h, 'seq_h':seq_h, 'monitor_h':monitor_h, 'dest_h':dest_h, 'src_h':src_h, 'cmd_h':cmd_h, 
+    ret = { 'header_h':header_h, 'type_h':type_h, 'seq_h':seq_h, 'monitor_h':monitor_h, 'dest_h':dest_h, 'src_h':src_h, 'cmd_h':cmd_h,
             'value_h':value_h, 'chksum_h':chksum_h, 'trailer_h':trailer_h, 'data_h':data_h, 'payload_h':payload_h,
             'type':type_t_dic.get(type_h),
-            'seq':seq_t_dic.get(seq_h), 
+            'seq':seq_t_dic.get(seq_h),
             'dest':device_t_dic.get(dest_h[:2]),
             'dest_subid':str(int(dest_h[2:4], 16)),
+            'dest_room':room_t_dic.get(dest_h[2:4]),
             'src':device_t_dic.get(src_h[:2]),
             'src_subid':str(int(src_h[2:4], 16)),
+            'src_room':room_t_dic.get(src_h[2:4]),
             'cmd':cmd if cmd!=None else cmd_h,
             'value':value_h,
-            'time': time.time(),
+            'time':time.time(),
             'flag':None}
     return ret
 
 
-def thermo_parse(value):    #/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    # ret = { #'heat_mode': 'heat' if value[:2]=='11' else 'off',
-    ret = { 'heat_mode': 'heat' if value[:4] != '1101' else 'off',
-    # ret = { 'heat_mode': 'heat' if value[:4] == '1100' else 'fan_only' if value[:4] == '1101' else 'off', 
-            #'heat_mode': 'heat' if value[2:4]!='01' else 'off',
-            'away': 'true' if value[2:4]=='01' else 'false',
-            'set_temp': int(value[4:6], 16) if value[:2]=='11' else int(config.get('User', 'init_temp')),
+def thermo_parse(value):
+    ret = { #'heat_mode': 'heat' if value[:2] == '11' else 'off', _Y
+            'heat_mode': 'heat' if value[2:4] == '00' else 'off',
+            'away': 'true' if value[2:4] == '01' else 'false',
+            'set_temp': int(value[4:6], 16) if value[:2] == '11' else int(config.get('User', 'init_temp')),
             'cur_temp': int(value[8:10], 16)}
     return ret
 
@@ -408,16 +408,16 @@ def mqtt_on_message(mqttc, obj, msg):
 
     # thermo heat/off : kocom/room/thermo/3/heat_mode/command
     if 'thermo' in topic_d and 'heat_mode' in topic_d:
-        # heatmode_dic = {'heat': '11', 'off': '02'}       ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        #  heatmode_dic = {'heat': '11', 'off': '00'}
-        # heatmode_dic = {'heat': '1100', 'fan_only': '1101', 'off': '0000'}
-        heatmode_dic = {'heat': '1100', 'off': '1101'}
+        #heatmode_dic = {'heat': '11', 'off': '01'}  ?
+        #heatmode_dic = {'heat': '11', 'off': '00'} 외출모드 패킷 재설정 _Y
+        heatmode_dic = {'heat': '00', 'off': '01'}
+
         dev_id = device_h_dic['thermo']+'{0:02x}'.format(int(topic_d[3]))
         q = query(dev_id)
-        # settemp_hex = q['value'][4:6] if q['flag']!=False else '14'
-        settemp_hex = '{0:02x}'.format(int(config.get('User', 'init_temp'))) if q['flag']!=False else '14'  
-        value = heatmode_dic.get(command) + settemp_hex + '0000000000' 
-        # value = heatmode_dic.get(command) + '00' + settemp_hex + '0000000000' //////////////////////////////////////////////////////////////////////////////////////////
+        settemp_hex = q['value'][4:6] if q['flag']!=False else '14'
+        #settemp_hex = '{0:02x}'.format(int(config.get('User', 'init_temp'))) if q['flag']!=False else '14' _Y
+        #value = heatmode_dic.get(command) + '00' + settemp_hex + '0000000000' 외출모드 패킷 재설정 _Y
+        value = '11' + heatmode_dic.get(command) + settemp_hex + '0000000000'
         send_wait_response(dest=dev_id, value=value, log='thermo heatmode')
 
     # thermo set temp : kocom/room/thermo/3/set_temp/command
@@ -537,13 +537,14 @@ def packet_processor(p):
             logtxt='[MQTT publish|gas] data[{}]'.format(state)
             mqttc.publish("kocom/livingroom/gas/state", json.dumps(state))
     elif p['type']=='send' and p['dest']=='elevator':
-        floor = int(p['value'][2:4],0)
+        #floor = int(p['value'][2:4],16) _Y
         rs485_floor = int(config.get('Elevator','rs485_floor', fallback=0))
         if rs485_floor != 0 :
-            #if p['value'] == '0300000000000000' : 
-             state = {'floor': floor}
-             if rs485_floor==floor:
-                state['state'] = 'off'
+            if p['value'] == '0300000000000000' :  # 도착 패킷 수신 시 off상태로 변경 aa5530bc0044000100010300000000000000350d0d _Y
+                state = {'state': 'off'}
+            #state = {'floor': floor} _Y
+            #if rs485_floor == floor: _Y
+                #state['state'] = 'off' _Y
         else:
             state = {'state': 'off'}
         logtxt='[MQTT publish|elevator] data[{}]'.format(state)
